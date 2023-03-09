@@ -404,8 +404,8 @@ def create_comirs(dset, batch_size, modelA, modelB):
 
                 padsz = 128
                 orig_shape = batch.shape
-                pad1 = compute_padding(batch.shape[-2])
-                pad2 = compute_padding(batch.shape[-1])
+                pad1 = compute_padding(batch.shape[-1])
+                pad2 = compute_padding(batch.shape[-2])
                 
                 padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz + pad2),
                                      mode='reflect')
@@ -448,14 +448,14 @@ def create_comirs(dset, batch_size, modelA, modelB):
     
             padsz = 128
             orig_shape = batch.shape
-            pad1 = compute_padding(batch.shape[-2])
-            pad2 = compute_padding(batch.shape[-1])
+            pad1 = compute_padding(batch.shape[-1])
+            pad2 = compute_padding(batch.shape[-2])
     
             padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz + pad2), mode='reflect')
             #newdim = (np.array(batch.shape[2:]) // 128) * 128
             #L1 = modelA(batch[:, modA, :newdim[0], :newdim[1]])
-            L2 = modelB(batch[:, modB, :newdim[0], :newdim[1]])
-            #L1 = modelA(padded_batch[:, modA, :, :])
+            #L2 = modelB(batch[:, modB, :newdim[0], :newdim[1]])
+            L1 = modelA(padded_batch[:, modA, :, :])
             L2 = modelB(padded_batch[:, modB, :, :])
         
             L1 = L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
