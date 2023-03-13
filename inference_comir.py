@@ -7,7 +7,7 @@
 #
 
 from models.tiramisu import DenseUNet
-from train_comir import MultimodalDataset, ModNet, ModNet3D
+from train_comir import MultimodalDataset, ModNet, ModNet3D, ImgAugTransform3D
 
 # Python Standard Libraries
 from datetime import datetime
@@ -80,7 +80,7 @@ if __name__ == "__main__":
     # %%
     print(len(sys.argv), sys.argv)
     if len(sys.argv) < 6:
-        print('Use: inference_comir.py model_path mod_a_path mod_b_path mod_a_out_path mod_b_out_path [spat_dim]')
+        print('Use: inference_comir.py model_path mod_a_path mod_b_path mod_a_out_path mod_b_out_path [crop_size]')
         sys.exit(-1)
 
     model_path = sys.argv[1]
@@ -88,7 +88,9 @@ if __name__ == "__main__":
     modB_path = sys.argv[3]
     modA_out_path = sys.argv[4]
     modB_out_path = sys.argv[5]
-    dim = int(sys.argv[6]) if len(sys.argv) >= 7 else 2
+    dim = 3
+    crop_size = int(sys.argv[6]) if len(sys.argv) >= 7 else 100
+
 
     if modA_path[-1] != '/':
         modA_path += '/'
@@ -115,7 +117,8 @@ if __name__ == "__main__":
     modelB = checkpoint['modelB']
 
     print("Loading dataset...")
-    dset = MultimodalDataset(modA_path + '*', modB_path + '*', logA=modelA.log_transform, logB=modelB.log_transform, transform=None, dim=dim)
+    transform = ImgAugTransform3D(crop_size=crop_size, center_crop=True)
+    dset = MultimodalDataset(modA_path + '*', modB_path + '*', logA=modelA.log_transform, logB=modelB.log_transform, transform=transform, dim=dim)
 
     # Modality slicing
     # You can choose a set of channels per modality (RGB for instance)
@@ -158,7 +161,7 @@ if __name__ == "__main__":
         batch = []
         names = []
         for j in range(l, r):
-            batch.append(dset.get(j, augment=False))
+            batch.append(dset.get(j, augment=True))
             names.append(dset.get_name(j))
 
         autocast = device.type == 'cuda' and torch.__version__ >= '1.6.0'
@@ -171,10 +174,10 @@ if __name__ == "__main__":
 
             padsz = 8 if dim == 3 else 128
             orig_shape = batch.shape
-            pad1 = compute_padding(batch.shape[-1])
-            pad2 = compute_padding(batch.shape[-2])
+            pad1 = compute_padding(batch.shape[-1], alignment=padsz)
+            pad2 = compute_padding(batch.shape[-2], alignment=padsz)
             if dim == 3:
-                pad3 = compute_padding(batch.shape[-3])
+                pad3 = compute_padding(batch.shape[-3], alignment=padsz)
 
             padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz+pad2, padsz, padsz+pad3) if dim == 3 else
                                         (padsz, padsz+pad1, padsz, padsz+pad2), mode='reflect')
