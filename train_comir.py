@@ -45,18 +45,23 @@ import skimage.transform as sktr
 import cv2
 import scipy
 import SimpleITK as sitk
+import monai.visualize as monai
 
 # Local libraries
 from utils.image import *
 from utils.torch import *
 
 from models.tiramisu import DenseUNet
+from models.tiramisu3d import DenseUNet3D
 from bspline import create_transform, create_transform_train
+from augmentation import Augmentor
 
 
 class MultimodalDataset(Dataset):
-    def __init__(self, pathA, pathB, logA=False, logB=False, transform=None):
+    def __init__(self, pathA, pathB, logA=False, logB=False, transform=None,
+                 dim=2):  # spatial dimensions of images
         self.transform = transform
+        self.dim = dim
 
         if not isinstance(pathA, list):
             pathA = [pathA]
@@ -64,12 +69,18 @@ class MultimodalDataset(Dataset):
             pathB = [pathB]
         self.pathA = pathA
         self.pathB = pathB
+
+        extensions = tuple([".png", ".jpg", "tif", ".nii.gz"])
         self.filenamesA = [glob.glob(path) for path in pathA]
         self.filenamesA = list(itertools.chain(*self.filenamesA))
+        self.filenamesA = [x for x in self.filenamesA if x.endswith(extensions)]
         self.filenamesB = [glob.glob(path) for path in pathB]
         self.filenamesB = list(itertools.chain(*self.filenamesB))
+        self.filenamesB = [x for x in self.filenamesB if x.endswith(extensions)]
 
         self.channels = [None, None]
+
+        self.base_names = []
 
         filename_index_pairs = filenames_to_dict(self.filenamesA, self.filenamesB)
 
@@ -87,18 +98,18 @@ class MultimodalDataset(Dataset):
                 if filename not in dataset.keys():
                     dataset[filename] = [None, None]
 
-                img = skio.imread(pathname)
-                # img = skio.imread(pathname, plugin='simpleitk')
+                img = skio.imread(pathname, plugin='simpleitk' if self.dim == 3
+                                                   else None)
                 img = skimage.img_as_float(img)
 
                 if log_flags[mod_ind]:
                     img = np.log(1.+img)
 
-                if img.ndim == 2:
+                if img.ndim == self.dim:
                     img = img[..., np.newaxis]
 
                 if self.channels[mod_ind] is None:
-                    self.channels[mod_ind] = img.shape[2]
+                    self.channels[mod_ind] = img.shape[self.dim]
 
                 dataset[filename][mod_ind] = img
 
@@ -111,6 +122,7 @@ class MultimodalDataset(Dataset):
                         dataset[image_set][1]
                     ]).astype(np.float32)
                 )
+                self.base_names.append(image_set)
             except ValueError:
                 print(f"Failed concatenating set {image_set}. Shapes are {dataset[image_set][0].shape} and {dataset[image_set][1].shape}")
 
@@ -125,6 +137,9 @@ class MultimodalDataset(Dataset):
             return self.transform(self.images[idx])
         return self.images[idx]
 
+    def get_name(self, idx):
+        return self.base_names[idx]
+
 
 class ImgAugTransform:
     def __init__(self, testing=False, crop_size=128, center_crop=True):
@@ -134,7 +149,7 @@ class ImgAugTransform:
                 cropping = iaa.CenterCropToFixedSize(crop_size,crop_size)
                 affine_transform = iaa.Affine(rotate=(-180, 180), order=[0, 1, 3], mode="symmetric")
             else:
-                cropping = iaa.CropToFixedSize(crop_size,crop_size, position='normal')
+                cropping = iaa.CropToFixedSize(crop_size,crop_size, position='uniform')  # was normal
                 affine_transform = iaa.Affine(rotate=(0, 0), order=[0, 1, 3], mode="symmetric")
             self.aug = iaa.Sequential([
                 iaa.Fliplr(0.5),
@@ -152,6 +167,17 @@ class ImgAugTransform:
     def __call__(self, img):
         img = np.array(img)
         return self.aug.augment_image(img)
+
+
+class ImgAugTransform3D:
+    def __init__(self, testing=False, crop_size=128, center_crop=False):
+        self.aug = Augmentor()
+        self.aug.set_crop('center' if center_crop else 'uniform', crop_size)
+        # TODO: more augmentations
+
+    def __call__(self, img):
+        img = np.array(img)
+        return self.aug.augment(img)
 
 
 class ModNet(DenseUNet):
@@ -173,11 +199,46 @@ class ModNet(DenseUNet):
         return self.final_conv(L_hat)
 
 
+class ModNet3D(DenseUNet3D):
+    def __init__(self, **args):
+        super(ModNet3D, self).__init__(**args, include_top=False)
+        out_channels = self.get_channels_count()[-1]
+        self.final_conv = torch.nn.Conv3d(out_channels, latent_channels, 1, bias=False)
+        # This is merely for the benefit of the serialization (so it will be known in the inference)
+        self.log_transform = False
+
+    def set_log_transform(self, flag):
+        # This is merely for the benefit of the serialization (so it will be known in the inference)
+        self.log_transform = flag
+
+    def forward(self, x):
+        # Penultimate layer
+        L_hat = super(ModNet3D, self).forward(x)
+        # Final convolution
+        return self.final_conv(L_hat)
+
+
 def worker_init_fn(worker_id):
     base_seed = int(torch.randint(2**32, (1,)).item())
     lib_seed = (base_seed + worker_id) % (2**32)
     imgaug.seed(lib_seed)
     np.random.seed(lib_seed)
+
+
+def filenames_to_dict(filenamesA, filenamesB):
+    d = {}
+    for i in range(len(filenamesA)):
+        basename = os.path.basename(filenamesA[i])
+        d[basename] = (i, None)
+    for i in range(len(filenamesB)):
+        basename = os.path.basename(filenamesB[i])
+        # filter out files only in B
+        if basename in d:
+            d[basename] = (d[basename][0], i)
+
+    # filter out files only in A
+    d = {k:v for k,v in d.items() if v[1] is not None}
+    return d
 
 
 if __name__ == "__main__":
@@ -194,6 +255,7 @@ if __name__ == "__main__":
         msg += "  'export_folder': folder where the model is saved\n"
         msg += "  'val_path_a': path to validation set for modality A (default '')\n"
         msg += "  'val_path_b': path to validation set for modality B (default '')\n"
+        msg += "  'dim': number of spatial dimensions of the image representations (default 2)\n"
         msg += "  'channels': number of channels of the image representations (default 1)\n"
         msg += "  'iterations': number of epochs to train for (default 100)\n"
         msg += "  'equivariance': enable C4 equivariance (default None)\n"
@@ -216,7 +278,7 @@ if __name__ == "__main__":
             print('No training set provided.')
             sys.exit(-1)
 
-        valid_keys = {'export_folder', 'val_path_a', 'val_path_b', 'log_a', 'log_b', 'iterations', 'channels', 'equivariance', 'l1', 'l2', 'temperature', 'workers', 'critic', 'crop_size'}
+        valid_keys = {'export_folder', 'val_path_a', 'val_path_b', 'log_a', 'log_b', 'iterations', 'dim', 'channels', 'equivariance', 'l1', 'l2', 'temperature', 'workers', 'critic', 'crop_size'}
         valid_equivariances = ["rotational", "affine", "deformable", "combined"]
 
         args['train_path_a'] = sys.argv[1]
@@ -230,6 +292,7 @@ if __name__ == "__main__":
         args['log_b'] = False
         args['center_crop'] = True
         args['iterations'] = 100
+        args['dim'] = 2
         args['channels'] = 1
         args['l1'] = 0.0001
         args['l2'] = 0.1
@@ -257,7 +320,7 @@ if __name__ == "__main__":
 
             if key == 'log_a' or key == 'log_b' or key == 'center_crop':
                 args[key] = int(val) != 0
-            elif key == 'iterations' or key == 'channels' or key == 'workers' or key == 'crop_size':
+            elif key == 'iterations' or key == 'dim' or key == 'channels' or key == 'workers' or key == 'crop_size':
                 args[key] = int(val)
             elif key == 'l1' or key == 'l2' or key == 'temperature':
                 args[key] = float(val)
@@ -275,6 +338,7 @@ if __name__ == "__main__":
     modB_train_path = args['train_path_b']
     modA_val_path = args['val_path_a']
     modB_val_path = args['val_path_b']
+    dim = args['dim']
 
     # METHOD RELATED
     # The place where the models will be saved
@@ -320,9 +384,9 @@ if __name__ == "__main__":
         # Number of convolutional filters for the first convolution
         "init_conv_filters": 32,
         # Number and depth of down blocks
-        "down_blocks": (4, 4, 4, 4, 4, 4),
+        "down_blocks": (4, 4, 4) if dim == 3 else (4, 4, 4, 4, 4, 4),
         # Number and depth of up blocks
-        "up_blocks": (4, 4, 4, 4, 4, 4),
+        "up_blocks": (4, 4, 4) if dim == 3 else (4, 4, 4, 4, 4, 4),
         # Number of dense layers in the bottleneck
         "bottleneck_layers": 4,
         # Upsampling type of layer (upsample has no grid artefacts)
@@ -394,31 +458,17 @@ if __name__ == "__main__":
         os.makedirs(export_folder)
         print("Created export folder!")
 
-    def filenames_to_dict(filenamesA, filenamesB):
-        d = {}
-        for i in range(len(filenamesA)):
-            basename = os.path.basename(filenamesA[i])
-            d[basename] = (i, None)
-        for i in range(len(filenamesB)):
-            basename = os.path.basename(filenamesB[i])
-            # filter out files only in B
-            if basename in d:
-                d[basename] = (d[basename][0], i)
-
-        # filter out files only in A
-        d = {k:v for k,v in d.items() if v[1] is not None}
-        return d
-
     print("Loading train set...")
 
     crop_size = args['crop_size']
     center_crop = args['center_crop']
-
-    dset = MultimodalDataset(modA_train_path + '/*', modB_train_path + '/*', logA=logTransformA, logB=logTransformB, transform=ImgAugTransform(crop_size=crop_size, center_crop=center_crop))
+    transform = ImgAugTransform3D(crop_size=crop_size, center_crop=center_crop) \
+        if dim == 3 else ImgAugTransform(crop_size=crop_size, center_crop=center_crop)
+    dset = MultimodalDataset(modA_train_path + '/*', modB_train_path + '/*', logA=logTransformA, logB=logTransformB, transform=transform, dim=dim)
     if modA_val_path is not None and modB_val_path is not None:
         validation_enabled = True
         print("Loading test set...")
-        dset_test = MultimodalDataset(modA_val_path + '/*', modB_val_path + '/*', logA=logTransformA, logB=logTransformB, transform=ImgAugTransform(testing=True, crop_size=crop_size))
+        dset_test = MultimodalDataset(modA_val_path + '/*', modB_val_path + '/*', logA=logTransformA, logB=logTransformB, transform=transform, dim=dim)  # testing=True?
     else:
         validation_enabled = False
 
@@ -450,8 +500,8 @@ if __name__ == "__main__":
     # Create model
 
     torch.manual_seed(0)
-    modelA = ModNet(in_channels=modA_len, nb_classes=latent_channels, **tiramisu_args).to(device1)
-    modelB = ModNet(in_channels=modB_len, nb_classes=latent_channels, **tiramisu_args).to(device2)
+    modelA = ModNet3D(in_channels=modA_len, nb_classes=latent_channels, **tiramisu_args).to(device1) if dim == 3 else ModNet(in_channels=modA_len, nb_classes=latent_channels, **tiramisu_args).to(device1)
+    modelB = ModNet3D(in_channels=modB_len, nb_classes=latent_channels, **tiramisu_args).to(device2) if dim == 3 else ModNet(in_channels=modB_len, nb_classes=latent_channels, **tiramisu_args).to(device2)
 
     # This is merely for the benefit of the serialization (so it will be known in the inference)
     modelA.set_log_transform(logTransformA)
@@ -571,7 +621,7 @@ if __name__ == "__main__":
         errors = []
         with torch.no_grad():
             for batch_idx, data in enumerate(test_loader):
-                data = data.permute(0, 3, 1, 2)
+                data = data.permute(0, -1, 1, 2, 3) if dim == 3 else data.permute(0, -1, 1, 2)
                 dataA = data[:, modA].float().to(device1)
                 dataB = data[:, modB].float().to(device2)
                 L1 = modelA(dataA)
@@ -609,7 +659,7 @@ if __name__ == "__main__":
         errors = []
         for batch_idx, data in enumerate(train_loader):
             # Preparing the batch
-            data = data.permute(0, 3, 1, 2)
+            data = data.permute(0, -1, 1, 2, 3) if dim == 3 else data.permute(0, -1, 1, 2)
             dataA = data[:, modA].float().to(device1)
             dataB = data[:, modB].float().to(device2)
             # Reseting the optimizer (gradients set to zero)
@@ -779,27 +829,37 @@ if __name__ == "__main__":
 
         if validation_enabled:
             _, similarities = test()
-        if equivariance in ["combined", "affine", "deformed"]:
-            image1 = dataA_transformed[:4,:,:,:]
-            image2 = dataB_transformed[:4,:,:,:]
 
+        if dim == 3:
+            monai.plot_2d_or_3d_image(dataA[:4], epoch, tb, tag="modA")
+            monai.plot_2d_or_3d_image(dataB[:4], epoch, tb, tag="modB")
+            comirA = np.round(scipy.special.expit(L1_ungrouped[:4].detach().cpu().detach().numpy()) * 255).astype('uint8')
+            comirB = np.round(scipy.special.expit(L2_ungrouped[:4].detach().cpu().detach().numpy()) * 255).astype('uint8')
+            monai.plot_2d_or_3d_image(comirA, epoch, tb, tag="comirA")
+            monai.plot_2d_or_3d_image(comirB, epoch, tb, tag="comirB")
         else:
-            image1 = dataA[:4,:,:,:]
-            image2 = dataB[:4,:,:,:]
-        grid1 = torchvision.utils.make_grid(image1)
-        grid2 = torchvision.utils.make_grid(image2)
+            if equivariance in ["combined", "affine", "deformed"]:
+                image1 = dataA_transformed[:4]  # dataA_transformed[:4,:,:,:]
+                image2 = dataB_transformed[:4]  # dataB_transformed[:4,:,:,:]
 
-        comirA = L1_ungrouped[:4,:,:,:].detach()
-        comirB = L2_ungrouped[:4,:,:,:].detach()
-        comirA = torchvision.utils.make_grid(comirA)
-        comirB = torchvision.utils.make_grid(comirB)
-        comirA = np.round(scipy.special.expit(comirA.cpu().detach().numpy()) * 255).astype('uint8')
-        comirB = np.round(scipy.special.expit(comirB.cpu().detach().numpy()) * 255).astype('uint8')
+            else:
+                image1 = dataA[:4]  # dataA[:4,:,:,:]
+                image2 = dataB[:4]  # dataB[:4,:,:,:]
+            grid1 = torchvision.utils.make_grid(image1)
+            grid2 = torchvision.utils.make_grid(image2)
 
-        tb.add_image("modA", grid1, epoch)
-        tb.add_image("modB", grid2, epoch)
-        tb.add_image("comirA", comirA, epoch)
-        tb.add_image("comirB", comirB, epoch)
+            comirA = L1_ungrouped[:4].detach()  # L1_ungrouped[:4,:,:,:].detach()
+            comirB = L2_ungrouped[:4].detach()  # L2_ungrouped[:4,:,:,:].detach()
+            comirA = torchvision.utils.make_grid(comirA)
+            comirB = torchvision.utils.make_grid(comirB)
+            comirA = np.round(scipy.special.expit(comirA.cpu().detach().numpy()) * 255).astype('uint8')
+            comirB = np.round(scipy.special.expit(comirB.cpu().detach().numpy()) * 255).astype('uint8')
+
+            tb.add_image("modA", grid1, epoch)
+            tb.add_image("modB", grid2, epoch)
+            tb.add_image("comirA", comirA, epoch)
+            tb.add_image("comirB", comirB, epoch)
+
         tb.add_scalar("Loss/Train", np.mean(train_loss), epoch)
 
 

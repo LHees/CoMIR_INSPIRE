@@ -12,3 +12,4 @@ torchvision
 tensorboard
 SimpleITK
 setuptools==59.5.0
+monai

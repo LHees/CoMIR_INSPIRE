@@ -6,6 +6,9 @@
 # 2020
 #
 
+from models.tiramisu import DenseUNet
+from train_comir import MultimodalDataset, ModNet, ModNet3D
+
 # Python Standard Libraries
 from datetime import datetime
 import glob
@@ -17,6 +20,7 @@ import sys
 import random
 import re
 import warnings
+from contextlib import nullcontext
 
 # Deep Learning libraries
 import torch
@@ -48,92 +52,6 @@ from utils.torch import *
 
 apply_sigmoid = True
 
-from models.tiramisu import DenseUNet
-from train_comir import ModNet
-
-
-class MultimodalDataset(Dataset):
-    def __init__(self, pathA, pathB, logA=False, logB=False, transform=None):
-        self.transform = transform
-
-        if not isinstance(pathA, list):
-            pathA = [pathA]
-        if not isinstance(pathB, list):
-            pathB = [pathB]
-        self.pathA = pathA
-        self.pathB = pathB
-
-        extensions = tuple([".png", ".jpg", "tif"])
-        
-        self.filenamesA = [glob.glob(path) for path in pathA]
-        self.filenamesA = list(itertools.chain(*self.filenamesA))
-        self.filenamesA = [x for x in self.filenamesA if x.endswith(extensions)]
-        self.filenamesB = [glob.glob(path) for path in pathB]
-        self.filenamesB = list(itertools.chain(*self.filenamesB))
-        self.filenamesB = [x for x in self.filenamesB if x.endswith(extensions)]
-
-        self.channels = [None, None]
-
-        self.base_names = []
-
-        filename_index_pairs = filenames_to_dict(self.filenamesA, self.filenamesB)
-        
-        filenames = [self.filenamesA, self.filenamesB]
-        log_flags = [logA, logB]
-
-        dataset = {}
-        for mod_ind in range(2):
-            # Read all files from modality
-            for filename, inds in filename_index_pairs.items():
-                pathname = filenames[mod_ind][inds[mod_ind]]
-
-                filename = os.path.basename(pathname)
-                
-                if filename not in dataset.keys():
-                    dataset[filename] = [None, None]
-
-                img = skio.imread(pathname)
-                # img = skio.imread(pathname, plugin='simpleitk')
-                img = skimage.img_as_float(img)
-
-                if log_flags[mod_ind]:
-                    img = np.log(1.+img)
-
-                if img.ndim == 2:
-                    img = img[..., np.newaxis]
-
-                if self.channels[mod_ind] is None:
-                    self.channels[mod_ind] = img.shape[2]
-
-                dataset[filename][mod_ind] = img
-
-        self.images = []
-        for image_set in dataset:
-            try:
-                self.images.append(
-                    np.block([
-                        dataset[image_set][0],
-                        dataset[image_set][1]
-                    ]).astype(np.float32)
-                )
-                self.base_names.append(image_set)
-            except ValueError:
-                print(f"Failed concatenating set {image_set}. Shapes are {dataset[image_set][0].shape} and {dataset[image_set][1].shape}")
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, idx):
-        return self.get(idx)
-
-    def get(self, idx, augment=True):
-        if augment and self.transform:
-            return self.transform(self.images[idx])
-        return self.images[idx]
-    
-    def get_name(self, idx):
-        return self.base_names[idx]
-
 
 def compute_padding(sz, alignment=128):
     if sz % alignment == 0:
@@ -162,7 +80,7 @@ if __name__ == "__main__":
     # %%
     print(len(sys.argv), sys.argv)
     if len(sys.argv) < 6:
-        print('Use: inference_comir.py model_path mod_a_path mod_b_path mod_a_out_path mod_b_out_path')
+        print('Use: inference_comir.py model_path mod_a_path mod_b_path mod_a_out_path mod_b_out_path [spat_dim]')
         sys.exit(-1)
 
     model_path = sys.argv[1]
@@ -170,6 +88,7 @@ if __name__ == "__main__":
     modB_path = sys.argv[3]
     modA_out_path = sys.argv[4]
     modB_out_path = sys.argv[5]
+    dim = int(sys.argv[6]) if len(sys.argv) >= 7 else 2
 
     if modA_path[-1] != '/':
         modA_path += '/'
@@ -193,7 +112,7 @@ if __name__ == "__main__":
     modelB = checkpoint['modelB']
 
     print("Loading dataset...")
-    dset = MultimodalDataset(modA_path + '*', modB_path + '*', logA=modelA.log_transform, logB=modelB.log_transform, transform=None)
+    dset = MultimodalDataset(modA_path + '*', modB_path + '*', logA=modelA.log_transform, logB=modelB.log_transform, transform=None, dim=dim)
 
     # Modality slicing
     # You can choose a set of channels per modality (RGB for instance)
@@ -233,8 +152,6 @@ if __name__ == "__main__":
     # How many images to compute in one iteration?
     batch_size = 1
 
-    # all_paths = []
-
     N = len(dset)
     l, r = 0, batch_size
     idx = 1
@@ -245,91 +162,156 @@ if __name__ == "__main__":
             batch.append(dset.get(j, augment=False))
             names.append(dset.get_name(j))
 
-        if device.type == 'cuda' and torch.__version__ >= '1.6.0':
-            with torch.cuda.amp.autocast(): # pytorch>=1.6.0 required
-                batch = torch.tensor(np.stack(batch), device=device).permute(0, 3, 1, 2)
+        autocast = device.type == 'cuda' and torch.__version__ >= '1.6.0'
+        with torch.cuda.amp.autocast() if autocast else nullcontext():
+            batch = torch.tensor(np.stack(batch), device=device)
+            batch = batch.permute(0, -1, 1, 2, 3) if dim == 3 else batch.permute(0, -1, 1, 2)
 
-    #            if device.type == 'cuda' and not use_AMP:
-    #                batch = batch.half()
-
-                padsz = 128
-                orig_shape = batch.shape
-                pad1 = compute_padding(batch.shape[-1])
-                pad2 = compute_padding(batch.shape[-2])
-
-                padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz + pad2), mode='reflect')
-                #newdim = (np.array(batch.shape[2:]) // 128) * 128
-                #L1 = modelA(batch[:, modA, :newdim[0], :newdim[1]])
-                #L2 = modelB(batch[:, modB, :newdim[0], :newdim[1]])
-                L1 = modelA(padded_batch[:, modA, :, :])
-                L2 = modelB(padded_batch[:, modB, :, :])
-
-                L1 = L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
-                L2 = L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
-
-                for j in range(len(batch)):#L1.shape[0]):
-                    path1 = modA_out_path + names[j]
-                    path2 = modB_out_path + names[j]
-                    im1 = L1[j].permute(1, 2, 0).cpu().detach().numpy()
-                    im2 = L2[j].permute(1, 2, 0).cpu().detach().numpy()
-
-                    if apply_sigmoid:
-                        im1 = np.round(scipy.special.expit(im1) * 255).astype('uint8')
-                        im2 = np.round(scipy.special.expit(im2) * 255).astype('uint8')
-                        skio.imsave(path1, im1)
-                        skio.imsave(path2, im2)
-                    else:
-                        skio.imsave(path1, im1)
-                        skio.imsave(path2, im2)
-                    print(f'Encodeing... {idx}/{N}')
-                    idx += 1
-        else:
-            batch = torch.tensor(np.stack(batch), device=device).permute(0, 3, 1, 2)
-
-            if device.type == 'cuda':
+            if not autocast and device.type == 'cuda':
                 batch = batch.half()
 
-            padsz = 128
+            padsz = 8 if dim == 3 else 128
             orig_shape = batch.shape
             pad1 = compute_padding(batch.shape[-1])
             pad2 = compute_padding(batch.shape[-2])
+            if dim == 3:
+                pad3 = compute_padding(batch.shape[-3])
 
-            padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz + pad2), mode='reflect')
-            #newdim = (np.array(batch.shape[2:]) // 128) * 128
-            #L1 = modelA(batch[:, modA, :newdim[0], :newdim[1]])
-            #L2 = modelB(batch[:, modB, :newdim[0], :newdim[1]])
-            L1 = modelA(padded_batch[:, modA, :, :])
-            L2 = modelB(padded_batch[:, modB, :, :])
+            padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz+pad2, padsz, padsz+pad3) if dim == 3 else
+                                        (padsz, padsz+pad1, padsz, padsz+pad2), mode='reflect')
+            L1 = modelA(padded_batch[:, modA])
+            L2 = modelB(padded_batch[:, modB])
 
-            L1 = L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
-            L2 = L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
+            L1 = L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3], padsz:padsz+orig_shape[4]] \
+                if dim == 3 else L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
+            L2 = L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3], padsz:padsz+orig_shape[4]] \
+                if dim == 3 else L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
 
-            for j in range(len(batch)):#L1.shape[0]):
+            for j in range(len(batch)):
                 path1 = modA_out_path + names[j]
                 path2 = modB_out_path + names[j]
 
-        #        print(path1)
-        #        print(path2)
-
-        #        all_paths.append(path1)
-        #        all_paths.append(path2)
-
+                rep1 = L1[j].permute(1, 2, 3, 0) if dim == 3 else L1[j].permute(1, 2, 0)
+                rep2 = L2[j].permute(1, 2, 3, 0) if dim == 3 else L2[j].permute(1, 2, 0)
                 if device.type == 'cuda':
-                    im1 = L1[j].permute(1, 2, 0).cpu().detach().numpy()
-                    im2 = L2[j].permute(1, 2, 0).cpu().detach().numpy()
+                    im1 = rep1.cpu().detach().numpy()
+                    im2 = rep2.cpu().detach().numpy()
                 else:
-                    im1 = L1[j].permute(1, 2, 0).detach().numpy()
-                    im2 = L2[j].permute(1, 2, 0).detach().numpy()
+                    im1 = rep1.detach().numpy()
+                    im2 = rep2.detach().numpy()
                 if apply_sigmoid:
                     im1 = np.round(scipy.special.expit(im1) * 255).astype('uint8')
                     im2 = np.round(scipy.special.expit(im2) * 255).astype('uint8')
-                    skio.imsave(path1, im1)
-                    skio.imsave(path2, im2)
-                else:
-                    skio.imsave(path1, im1)
-                    skio.imsave(path2, im2)
+
+                skio.imsave(path1, im1, plugin='simpleitk' if dim == 3 else None)
+                skio.imsave(path2, im2, plugin='simpleitk' if dim == 3 else None)
                 print(f'Encodeing... {idx}/{N}')
                 idx += 1
+
+
+
+
+
+
+    #     if device.type == 'cuda' and torch.__version__ >= '1.6.0':
+    #         with torch.cuda.amp.autocast(): # pytorch>=1.6.0 required
+    #             batch = torch.tensor(np.stack(batch), device=device)
+    #             batch = batch.permute(0, -1, 1, 2, 3) if dim == 3 else batch.permute(0, -1, 1, 2)
+    #
+    # #            if device.type == 'cuda' and not use_AMP:
+    # #                batch = batch.half()
+    #
+    #             padsz = 8 if dim == 3 else 128
+    #             orig_shape = batch.shape
+    #             pad1 = compute_padding(batch.shape[-1])
+    #             pad2 = compute_padding(batch.shape[-2])
+    #             if dim == 3:
+    #                 pad3 = compute_padding(batch.shape[-3])
+    #
+    #             padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz+pad2, padsz, padsz+pad3) if dim == 3 else
+    #                                         (padsz, padsz+pad1, padsz, padsz+pad2), mode='reflect')
+    #             #newdim = (np.array(batch.shape[2:]) // 128) * 128
+    #             #L1 = modelA(batch[:, modA, :newdim[0], :newdim[1]])
+    #             #L2 = modelB(batch[:, modB, :newdim[0], :newdim[1]])
+    #             L1 = modelA(padded_batch[:, modA])
+    #             L2 = modelB(padded_batch[:, modB])
+    #
+    #             L1 = L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3], padsz:padsz+orig_shape[4]] \
+    #                 if dim == 3 else L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
+    #             L2 = L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3], padsz:padsz+orig_shape[4]] \
+    #                 if dim == 3 else L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
+    #
+    #             for j in range(len(batch)):#L1.shape[0]):
+    #                 # TODO: modify for 3D
+    #                 path1 = modA_out_path + names[j]
+    #                 path2 = modB_out_path + names[j]
+    #                 im1 = L1[j].permute(1, 2, 0).cpu().detach().numpy()
+    #                 im2 = L2[j].permute(1, 2, 0).cpu().detach().numpy()
+    #
+    #                 if apply_sigmoid:
+    #                     im1 = np.round(scipy.special.expit(im1) * 255).astype('uint8')
+    #                     im2 = np.round(scipy.special.expit(im2) * 255).astype('uint8')
+    #                     skio.imsave(path1, im1)
+    #                     skio.imsave(path2, im2)
+    #                 else:
+    #                     skio.imsave(path1, im1)
+    #                     skio.imsave(path2, im2)
+    #                 print(f'Encodeing... {idx}/{N}')
+    #                 idx += 1
+    #     else:
+    #         batch = torch.tensor(np.stack(batch), device=device)
+    #         batch = batch.permute(0, -1, 1, 2, 3) if dim == 3 else batch.permute(0, -1, 1, 2)
+    #
+    #         if device.type == 'cuda':
+    #             batch = batch.half()
+    #
+    #         padsz = 8 if dim == 3 else 128
+    #         orig_shape = batch.shape
+    #         pad1 = compute_padding(batch.shape[-1])
+    #         pad2 = compute_padding(batch.shape[-2])
+    #         if dim == 3:
+    #             pad3 = compute_padding(batch.shape[-3])
+    #
+    #         padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz+pad2, padsz, padsz+pad3) if dim == 3 else
+    #                                     (padsz, padsz+pad1, padsz, padsz+pad2), mode='reflect')
+    #         #newdim = (np.array(batch.shape[2:]) // 128) * 128
+    #         #L1 = modelA(batch[:, modA, :newdim[0], :newdim[1]])
+    #         #L2 = modelB(batch[:, modB, :newdim[0], :newdim[1]])
+    #         L1 = modelA(padded_batch[:, modA])
+    #         L2 = modelB(padded_batch[:, modB])
+    #
+    #         L1 = L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3], padsz:padsz+orig_shape[4]] \
+    #             if dim == 3 else L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
+    #         L2 = L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3], padsz:padsz+orig_shape[4]] \
+    #             if dim == 3 else L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
+    #
+    #         for j in range(len(batch)):#L1.shape[0]):
+    #             # TODO: modify for 3D
+    #             path1 = modA_out_path + names[j]
+    #             path2 = modB_out_path + names[j]
+    #
+    #     #        print(path1)
+    #     #        print(path2)
+    #
+    #     #        all_paths.append(path1)
+    #     #        all_paths.append(path2)
+    #
+    #             if device.type == 'cuda':
+    #                 im1 = L1[j].permute(1, 2, 0).cpu().detach().numpy()
+    #                 im2 = L2[j].permute(1, 2, 0).cpu().detach().numpy()
+    #             else:
+    #                 im1 = L1[j].permute(1, 2, 0).detach().numpy()
+    #                 im2 = L2[j].permute(1, 2, 0).detach().numpy()
+    #             if apply_sigmoid:
+    #                 im1 = np.round(scipy.special.expit(im1) * 255).astype('uint8')
+    #                 im2 = np.round(scipy.special.expit(im2) * 255).astype('uint8')
+    #                 skio.imsave(path1, im1)
+    #                 skio.imsave(path2, im2)
+    #             else:
+    #                 skio.imsave(path1, im1)
+    #                 skio.imsave(path2, im2)
+    #             print(f'Encodeing... {idx}/{N}')
+    #             idx += 1
 
         del L1
         del L2
@@ -337,7 +319,3 @@ if __name__ == "__main__":
         l, r = l+batch_size, r+batch_size
         if r > N:
             r = N
-
-    #all_paths = sorted(all_paths)
-    #for i in range(len(all_paths)):
-    #    print(all_paths[i])
