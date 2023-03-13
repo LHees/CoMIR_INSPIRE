@@ -30,8 +30,8 @@ class Augmentor():
         return image[crop_slice]
 
     def set_crop(self, mode, size):
-        if mode not in ['uniform', 'center']:
-            raise ValueError("mode must be one of 'uniform' or 'center'")
+        if mode not in ['uniform', 'center', None]:
+            raise ValueError("mode must be one of 'uniform', 'center' or None")
         self.crop_mode = mode
         self.crop_size = size
 

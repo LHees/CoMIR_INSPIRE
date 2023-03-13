@@ -134,7 +134,14 @@ class MultimodalDataset(Dataset):
 
     def get(self, idx, augment=True):
         if augment and self.transform:
-            return self.transform(self.images[idx])
+            try:
+                return self.transform(self.images[idx])
+            except AssertionError:
+                if isinstance(self.transform, ImgAugTransform3D):
+                    warnings.warn("The image is too small for the requested crop."
+                                  " Continuing without cropping.")
+                    self.transform.aug.set_crop(None, None)
+                    return self.transform(self.images[idx])
         return self.images[idx]
 
     def get_name(self, idx):
