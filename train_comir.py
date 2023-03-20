@@ -313,7 +313,7 @@ if __name__ == "__main__":
         i = 3
         while i < cnt:
             key = sys.argv[i]
-            assert(len(key)>1), str(i) + " is empty. previous key " + sys.argv[i-2] + ". cnt = " + str(cnt)
+            assert len(key) > 1, str(i) + " is empty. previous key " + sys.argv[i-2] + ". cnt = " + str(cnt)
             if key[0] == '-':
                 key = key[1:]
             if len(key) > 0 and key[0] == '-':
@@ -323,7 +323,7 @@ if __name__ == "__main__":
 
             val = sys.argv[i+1]
             if key == 'equivariance':
-                assert(val in valid_equivariances, val + " is not a valid equivariance")
+                assert val in valid_equivariances, val + " is not a valid equivariance"
 
             if key == 'log_a' or key == 'log_b' or key == 'center_crop':
                 args[key] = int(val) != 0
