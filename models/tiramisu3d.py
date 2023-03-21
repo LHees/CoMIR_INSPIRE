@@ -9,10 +9,7 @@ import torch.utils.checkpoint as cp
 
 # Local imports
 from .model import BaseModel
-from .layers.BlurPool2d import BlurPool2d
 
-
-# TODO: also modify model.py
 
 def _bn_function_factory(norm, relu, conv):
     def bn_function(*inputs):
@@ -141,7 +138,6 @@ class TransitionDown3D(nn.Sequential):
         elif pooling == "blurpool":
             raise NotImplementedError("The blurpool option has not been "
                                       "implemented for 3D networks")
-            # self.add_module("blurpool", BlurPool2d(out_channels))
 
     def forward(self, x):
         return super().forward(x)
@@ -166,17 +162,6 @@ class TransitionUp3D(nn.Module):
         elif upsampling_type == "pixelshuffle":
             raise NotImplementedError("The pixelshuffle option has not been "
                                       "implemented for 3D networks")
-            # self.upsampling_layer = nn.Sequential(
-            #     nn.Conv2d(
-            #         in_channels=in_channels,
-            #         out_channels=4 * out_channels,
-            #         kernel_size=3,
-            #         padding=True,
-            #         bias=True,
-            #     ),
-            #     nn.ReLU(inplace=True),
-            #     nn.PixelShuffle(2),
-            # )
         else:  # Default: "deconv"
             self.upsampling_layer = nn.Sequential(
                 nn.ConvTranspose3d(
@@ -192,7 +177,7 @@ class TransitionUp3D(nn.Module):
 
     def forward(self, x, skip):
         out = self.upsampling_layer(x)
-        out = center_crop3D(out, skip.size(2), skip.size(3), skip.size(4))  # TODO: check dimensions of "skip" input
+        out = center_crop3D(out, skip.size(2), skip.size(3), skip.size(4))
         out = torch.cat([skip, out], 1)
         return out
 

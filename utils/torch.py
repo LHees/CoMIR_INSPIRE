@@ -1,6 +1,7 @@
 import torch
 import numpy as np
-from torchvision.transforms.functional import affine
+import torch.nn.functional as F
+
 
 class OverSampler(torch.utils.data.Sampler):
     def __init__(self, data_source, steps_per_epoch):
@@ -21,6 +22,7 @@ class OverSampler(torch.utils.data.Sampler):
 
     def __len__(self):
         return self.steps_per_epoch
+
 
 def rigid_transform(img, x, y, angle, mode="bilinear", device="cuda"):
     """Applies a rigid transformation to an image.
@@ -44,6 +46,7 @@ def rigid_transform(img, x, y, angle, mode="bilinear", device="cuda"):
     grid = F.affine_grid(theta, img.shape, align_corners=True)
     return F.grid_sample(img, grid, mode, align_corners=True)
 
+
 def activation_decay(tensors, p=2., device=None):
     """Computes the L_p^p norm over an activation map.
     """
@@ -56,11 +59,14 @@ def activation_decay(tensors, p=2., device=None):
         loss += torch.sum(tensor.pow(p).abs()).to(device)
     return loss / Z
 
-def batch_rotate_p4(batch, k, device=None):
-    """Rotates by k*90 degrees each sample in a batch.
+
+def batch_rotate_p4(batch, k, device=None):  # TODO: rename?
+    """Rotates each sample in a batch.
     Args:
-        batch (Tensor): the batch to rotate, format is (N, C, H, W).
-        k (list of int): the rotations to perform for each sample k[i]*90 degrees.
+        batch (Tensor): the batch to rotate, format is (N, C, [D], H, W).
+        k (ndarray of int): the rotations to perform for each sample:
+            k[i]*90 degrees for 2D images, or
+            sequence number k[i] for 3D images (see https://stackoverflow.com/a/50546727).
         device (str): the device to allocate memory and run computations on.
     
     Returns (Tensor):
@@ -68,10 +74,19 @@ def batch_rotate_p4(batch, k, device=None):
     """
     batch_size = batch.shape[0]
     assert len(k) == batch_size, "The size of k must be equal to the batch size."
-    batch_p4 = torch.empty_like(batch).to(device)
+    cube_rotations = ['', 'X', 'Y', 'Z', 'XX', 'XY', 'XZ', 'YX', 'YY', 'ZY',
+                      'ZZ', 'XXX', 'XXY', 'XXZ', 'XYX', 'XYY', 'XZZ', 'YXX',
+                      'YYY', 'ZZZ', 'XXXY', 'XXYX', 'XYXX', 'XYYY']
+    batch_p4 = torch.clone(batch).to(device)
     for i in range(batch_size):
-        batch_p4[i] = torch.rot90(batch[i], k=int(k[i]), dims=(1,2))
+        if batch.dim == 5:  # 3D images
+            for rot in cube_rotations[k[i]][::-1]:  # reverse the string
+                dims = (1, 2) if rot == 'X' else (1, 3) if rot == 'Y' else (2, 3)
+                batch_p4[i] = torch.rot90(batch_p4[i], dims=dims)
+        else:  # 2D images assumed
+            batch_p4[i] = torch.rot90(batch_p4[i], k=int(k[i]), dims=(1, 2))
     return batch_p4
+
 
 def batch_affine(batch, transform, device=None):
     """Applies each transform in transforms to the corresponding image in each batch
@@ -87,6 +102,7 @@ def batch_affine(batch, transform, device=None):
         #batch_affine[i] = transforms[i](batch[i])
     return batch_affine
 
+
 def batch_displace(batch, transform, device=None):
     batch_size = batch.shape[0]
     channels = batch.shape[1]
@@ -95,6 +111,7 @@ def batch_displace(batch, transform, device=None):
     for i in range(batch_size):
         batch_displaced[i,:,:,:] = transform[0,:,:,:](batch[i,:,:,:])
     return batch_displaced
+
 
 def batch_displace_affine(batch, transform, device=None):
     displace_transform, affine_transform = transform

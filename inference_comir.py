@@ -72,7 +72,7 @@ def filenames_to_dict(filenamesA, filenamesB):
             d[basename] = (d[basename][0], i)
 
     # filter out files only in A
-    d = {k:v for k,v in d.items() if v[1] is not None}
+    d = {k: v for k, v in d.items() if v[1] is not None}
     return d
 
 
@@ -167,12 +167,12 @@ if __name__ == "__main__":
         autocast = device.type == 'cuda' and torch.__version__ >= '1.6.0'
         with torch.cuda.amp.autocast() if autocast else nullcontext():
             batch = torch.tensor(np.stack(batch), device=device)
-            batch = batch.permute(0, -1, 1, 2, 3) if dim == 3 else batch.permute(0, -1, 1, 2)
+            batch = batch.movedim(-1, 1)
 
             if not autocast and device.type == 'cuda':
                 batch = batch.half()
 
-            padsz = 8 if dim == 3 else 128
+            padsz = 16 if dim == 3 else 128
             orig_shape = batch.shape
             pad1 = compute_padding(batch.shape[-1], alignment=padsz)
             pad2 = compute_padding(batch.shape[-2], alignment=padsz)
@@ -193,8 +193,8 @@ if __name__ == "__main__":
                 path1 = modA_out_path + names[j]
                 path2 = modB_out_path + names[j]
 
-                rep1 = L1[j].permute(1, 2, 3, 0) if dim == 3 else L1[j].permute(1, 2, 0)
-                rep2 = L2[j].permute(1, 2, 3, 0) if dim == 3 else L2[j].permute(1, 2, 0)
+                rep1 = L1[j].movedim(0, -1)
+                rep2 = L2[j].movedim(0, -1)
                 if device.type == 'cuda':
                     im1 = rep1.cpu().detach().numpy()
                     im2 = rep2.cpu().detach().numpy()

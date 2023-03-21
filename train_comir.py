@@ -177,7 +177,7 @@ class ImgAugTransform:
 
 
 class ImgAugTransform3D:
-    def __init__(self, testing=False, crop_size=128, center_crop=False):
+    def __init__(self, testing=False, crop_size=32, center_crop=False):
         self.aug = Augmentor()
         self.aug.set_crop('center' if center_crop else 'uniform', crop_size)
         # TODO: more augmentations
@@ -391,9 +391,9 @@ if __name__ == "__main__":
         # Number of convolutional filters for the first convolution
         "init_conv_filters": 32,
         # Number and depth of down blocks
-        "down_blocks": (4, 4, 4) if dim == 3 else (4, 4, 4, 4, 4, 4),
+        "down_blocks": tuple([4] * 5 if dim == 3 else 6),
         # Number and depth of up blocks
-        "up_blocks": (4, 4, 4) if dim == 3 else (4, 4, 4, 4, 4, 4),
+        "up_blocks": tuple([4] * 5 if dim == 3 else 6),
         # Number of dense layers in the bottleneck
         "bottleneck_layers": 4,
         # Upsampling type of layer (upsample has no grid artefacts)
@@ -628,7 +628,7 @@ if __name__ == "__main__":
         errors = []
         with torch.no_grad():
             for batch_idx, data in enumerate(test_loader):
-                data = data.permute(0, -1, 1, 2, 3) if dim == 3 else data.permute(0, -1, 1, 2)
+                data = data.movedim(-1, 1)
                 dataA = data[:, modA].float().to(device1)
                 dataB = data[:, modB].float().to(device2)
                 L1 = modelA(dataA)
@@ -666,7 +666,7 @@ if __name__ == "__main__":
         errors = []
         for batch_idx, data in enumerate(train_loader):
             # Preparing the batch
-            data = data.permute(0, -1, 1, 2, 3) if dim == 3 else data.permute(0, -1, 1, 2)
+            data = data.movedim(-1, 1)
             dataA = data[:, modA].float().to(device1)
             dataB = data[:, modB].float().to(device2)
             # Reseting the optimizer (gradients set to zero)
@@ -676,10 +676,11 @@ if __name__ == "__main__":
                 # Applies random 90 degrees rotations to the data (group p4)
                 # This step enforces the formula of equivariance: d(f(T(x)), T^{-1}(f(x)))
                 # With f(x) the neural network, T(x) a transformation, T^{-1}(x) the inverse transformation
-                random_rotA = np.random.randint(4, size=batch_size)
-                random_rotB = np.random.randint(4, size=batch_size)
+                random_rotA = np.random.randint(24 if dim == 3 else 4, size=batch_size)
+                random_rotB = np.random.randint(24 if dim == 3 else 4, size=batch_size)
                 dataA_p4 = batch_rotate_p4(dataA, random_rotA, device1)
                 dataB_p4 = batch_rotate_p4(dataB, random_rotB, device2)
+                # TODO: drop original dataA from memory? (remove all usages first)
 
                 # Compute the forward pass
                 L1 = modelA(dataA_p4)
