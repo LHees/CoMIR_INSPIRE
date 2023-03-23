@@ -17,6 +17,7 @@ import random
 import time
 import warnings
 import shutil
+import random
 # Can be uncommented to select GPU from the script...
 #os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 #os.environ["CUDA_VISIBLE_DEVICES"] = "2"
@@ -669,26 +670,33 @@ if __name__ == "__main__":
             data = data.movedim(-1, 1)
             dataA = data[:, modA].float().to(device1)
             dataB = data[:, modB].float().to(device2)
-            # Reseting the optimizer (gradients set to zero)
+            # Resetting the optimizer (gradients set to zero)
             optimizerA.zero_grad()
             optimizerB.zero_grad()
             if equivariance == "rotational":
                 # Applies random 90 degrees rotations to the data (group p4)
+                # A rotation is applied to the data of one modality.
+                # Then the same rotation is applied to the CoMIR of the other.
                 # This step enforces the formula of equivariance: d(f(T(x)), T^{-1}(f(x)))
                 # With f(x) the neural network, T(x) a transformation, T^{-1}(x) the inverse transformation
-                random_rotA = np.random.randint(24 if dim == 3 else 4, size=batch_size)
-                random_rotB = np.random.randint(24 if dim == 3 else 4, size=batch_size)
-                dataA_p4 = batch_rotate_p4(dataA, random_rotA, device1)
-                dataB_p4 = batch_rotate_p4(dataB, random_rotB, device2)
-                # TODO: drop original dataA from memory? (remove all usages first)
 
-                # Compute the forward pass
-                L1 = modelA(dataA_p4)
-                L2 = modelB(dataB_p4)
+                random_rot = np.random.randint(24 if dim == 3 else 4, size=batch_size)
+                mod_rot = random.choice(['A', 'B'])  # randomly select one modality to be rotated before the forward pass
+                if mod_rot == 'A':
+                    dataA_p4 = batch_rotate_p4(dataA, random_rot, device1)
+                    L1 = modelA(dataA_p4)
+                    L2 = modelB(dataB)
+                    L1_ungrouped = L1
+                    L2_ungrouped = batch_rotate_p4(L2, random_rot, device2)
+                else:
+                    dataB_p4 = batch_rotate_p4(dataB, random_rot, device2)
+                    L1 = modelA(dataA)
+                    L2 = modelB(dataB_p4)
+                    L1_ungrouped = batch_rotate_p4(L1, random_rot, device1)
+                    L2_ungrouped = L2
 
-                # Applies the inverse of the 90 degree rotation to recover the right positions
-                L1_ungrouped = batch_rotate_p4(L1, -random_rotA, device1)
-                L2_ungrouped = batch_rotate_p4(L2, -random_rotB, device2)
+                # TODO: drop original dataA and dataB from memory? (remove all usages first)
+
             elif equivariance == "affine":
                 # Applies random 90 degrees rotations to the data (group p4)
                 # This step enforces the formula of equivariance: d(f(T(x)), T^{-1}(f(x)))
