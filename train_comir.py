@@ -680,19 +680,20 @@ if __name__ == "__main__":
                 # This step enforces the formula of equivariance: d(f(T(x)), T^{-1}(f(x)))
                 # With f(x) the neural network, T(x) a transformation, T^{-1}(x) the inverse transformation
 
-                random_rot = np.random.randint(24 if dim == 3 else 4, size=batch_size)
+                from rot90_3d import rot90_3d
+                random_rot = torch.from_numpy(np.random.randint(24 if dim == 3 else 4, size=batch_size))
                 mod_rot = random.choice(['A', 'B'])  # randomly select one modality to be rotated before the forward pass
                 if mod_rot == 'A':
-                    dataA_p4 = batch_rotate_p4(dataA, random_rot, device1)
+                    dataA_p4 = rot90_3d(dataA, random_rot)
                     L1 = modelA(dataA_p4)
                     L2 = modelB(dataB)
                     L1_ungrouped = L1
-                    L2_ungrouped = batch_rotate_p4(L2, random_rot, device2)
+                    L2_ungrouped = rot90_3d(L2, random_rot)
                 else:
-                    dataB_p4 = batch_rotate_p4(dataB, random_rot, device2)
+                    dataB_p4 = rot90_3d(dataB, random_rot)
                     L1 = modelA(dataA)
                     L2 = modelB(dataB_p4)
-                    L1_ungrouped = batch_rotate_p4(L1, random_rot, device1)
+                    L1_ungrouped = rot90_3d(L1, random_rot)
                     L2_ungrouped = L2
 
                 # TODO: drop original dataA and dataB from memory? (remove all usages first)
