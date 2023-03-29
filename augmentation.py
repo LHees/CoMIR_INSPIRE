@@ -38,9 +38,9 @@ class Augmentor():
     def _compute_crop_sample_space(self, z, y, x):
         # TODO: take other augmentations into account
         pass
-        space = range(z//2 - self.crop_size//2, z//2 + self.crop_size//2), \
-            range(y//2 - self.crop_size//2, y//2 + self.crop_size//2), \
-            range(x//2 - self.crop_size//2, x//2 + self.crop_size//2)
+        space = range(self.crop_size//2, z - self.crop_size//2 - 1), \
+                range(self.crop_size//2, y - self.crop_size//2 - 1), \
+                range(self.crop_size//2, x - self.crop_size//2 - 1)
         return space
 
     def __str__(self):

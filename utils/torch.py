@@ -79,7 +79,7 @@ def batch_rotate_p4(batch, k, device=None):  # TODO: rename?
                       'YYY', 'ZZZ', 'XXXY', 'XXYX', 'XYXX', 'XYYY']
     batch_p4 = torch.clone(batch).to(device)
     for i in range(batch_size):
-        if batch.dim == 5:  # 3D images
+        if batch.dim() == 5:  # 3D images
             for rot in cube_rotations[k[i]][::-1]:  # reverse the string
                 dims = (1, 2) if rot == 'X' else (1, 3) if rot == 'Y' else (2, 3)
                 batch_p4[i] = torch.rot90(batch_p4[i], dims=dims)
