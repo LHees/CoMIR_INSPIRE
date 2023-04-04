@@ -161,11 +161,11 @@ class ImgAugTransform:
                 affine_transform = iaa.Affine(rotate=(0, 0), order=[0, 1, 3], mode="symmetric")
             self.aug = iaa.Sequential([
                 iaa.Fliplr(0.5),
-                affine_transform,#iaa.Affine(rotate=(-180, 180), order=[0, 1, 3], mode="symmetric"),
+                affine_transform,
                 iaa.Sometimes(
                     0.5,
                     iaa.GaussianBlur(sigma=(0, 2.0))),
-                cropping#iaa.CenterCropToFixedSize(crop_size,crop_size)#, position='normal'),#croptofixedsize
+                cropping
             ])
         else:
             self.aug = iaa.Sequential([
@@ -181,7 +181,8 @@ class ImgAugTransform3D:
     def __init__(self, testing=False, crop_size=32, center_crop=False):
         self.aug = Augmentor()
         self.aug.set_crop('center' if center_crop else 'uniform', crop_size)
-        # TODO: more augmentations
+        self.aug.set_blur((0.0, 0.2), 0.5)
+        self.aug.set_fliplr(True, 0.5)
 
     def __call__(self, img):
         img = np.array(img)
