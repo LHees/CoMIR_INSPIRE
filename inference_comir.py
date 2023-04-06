@@ -88,7 +88,7 @@ if __name__ == "__main__":
     modB_path = sys.argv[3]
     modA_out_path = sys.argv[4]
     modB_out_path = sys.argv[5]
-    dim = 3
+    dim = 3  # TODO: generalize
     crop_size = int(sys.argv[6]) if len(sys.argv) >= 7 else 100
 
 

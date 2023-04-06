@@ -169,7 +169,7 @@ class ImgAugTransform:
             ])
         else:
             self.aug = iaa.Sequential([
-                iaa.CropToFixedSize(crop_size,crop_size),
+                iaa.CropToFixedSize(crop_size, crop_size),
             ])
 
     def __call__(self, img):
@@ -181,8 +181,10 @@ class ImgAugTransform3D:
     def __init__(self, testing=False, crop_size=32, center_crop=False):
         self.aug = Augmentor()
         self.aug.set_crop('center' if center_crop else 'uniform', crop_size)
-        self.aug.set_blur((0.0, 0.2), 0.5)
-        self.aug.set_fliplr(True, 0.5)
+
+        if not testing:
+            self.aug.set_blur((0.0, 0.2), 0.5)
+            self.aug.set_fliplr(True, 0.5)
 
     def __call__(self, img):
         img = np.array(img)
