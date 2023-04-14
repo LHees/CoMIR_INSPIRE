@@ -60,7 +60,7 @@ from augmentation import Augmentor
 
 class MultimodalDataset(Dataset):
     def __init__(self, pathA, pathB, logA=False, logB=False, transform=None,
-                 dim=2):  # spatial dimensions of images
+                 dim=2, singleaxis=False):
         self.transform = transform
         self.dim = dim
 
@@ -78,6 +78,9 @@ class MultimodalDataset(Dataset):
         self.filenamesB = [glob.glob(path) for path in pathB]
         self.filenamesB = list(itertools.chain(*self.filenamesB))
         self.filenamesB = [x for x in self.filenamesB if x.endswith(extensions)]
+        if dim == 2 and singleaxis:
+            self.filenamesA = [x for x in self.filenamesA if "rot-0" in x]
+            self.filenamesB = [x for x in self.filenamesB if "rot-0" in x]
 
         self.channels = [None, None]
 
@@ -265,6 +268,7 @@ if __name__ == "__main__":
         msg += "  'val_path_a': path to validation set for modality A (default '')\n"
         msg += "  'val_path_b': path to validation set for modality B (default '')\n"
         msg += "  'dim': number of spatial dimensions of the image representations (default 2)\n"
+        msg += "  'single_axis': use only slices along one axis, if applying 2D CoMIR learning for slices of 3D volumes [0/1] (default 0)\n"
         msg += "  'channels': number of channels of the image representations (default 1)\n"
         msg += "  'iterations': number of epochs to train for (default 100)\n"
         msg += "  'equivariance': enable C4 equivariance (default None)\n"
@@ -287,7 +291,7 @@ if __name__ == "__main__":
             print('No training set provided.')
             sys.exit(-1)
 
-        valid_keys = {'export_folder', 'val_path_a', 'val_path_b', 'log_a', 'log_b', 'iterations', 'dim', 'channels', 'equivariance', 'l1', 'l2', 'temperature', 'workers', 'critic', 'crop_size'}
+        valid_keys = {'export_folder', 'val_path_a', 'val_path_b', 'log_a', 'log_b', 'iterations', 'dim', 'single_axis', 'channels', 'equivariance', 'l1', 'l2', 'temperature', 'workers', 'critic', 'crop_size'}
         valid_equivariances = ["rotational", "affine", "deformable", "combined"]
 
         args['train_path_a'] = sys.argv[1]
@@ -302,6 +306,7 @@ if __name__ == "__main__":
         args['center_crop'] = True
         args['iterations'] = 100
         args['dim'] = 2
+        args['single_axis'] = False
         args['channels'] = 1
         args['l1'] = 0.0001
         args['l2'] = 0.1
@@ -327,7 +332,7 @@ if __name__ == "__main__":
             if key == 'equivariance':
                 assert val in valid_equivariances, val + " is not a valid equivariance"
 
-            if key == 'log_a' or key == 'log_b' or key == 'center_crop':
+            if key == 'log_a' or key == 'log_b' or key == 'center_crop' or key == 'single_axis':
                 args[key] = int(val) != 0
             elif key == 'iterations' or key == 'dim' or key == 'channels' or key == 'workers' or key == 'crop_size':
                 args[key] = int(val)
@@ -351,12 +356,13 @@ if __name__ == "__main__":
 
     # METHOD RELATED
     # The place where the models will be saved
-    export_folder = args['export_folder'] # Add this path to the .gitignore
+    export_folder = args['export_folder']  # Add this path to the .gitignore
     # The number of channels in the latent space
     latent_channels = args['channels']
 
-    logTransformA = args['log_a'] #True
+    logTransformA = args['log_a']
     logTransformB = args['log_b']
+    single_axis = args['single_axis']
 
     # Distance function
     simfunctions = {
@@ -369,15 +375,15 @@ if __name__ == "__main__":
         "corr"      : lambda x, y: (x*y).sum(axis=1),
         "cosine"    : lambda x, y: F.cosine_similarity(x, y, dim=1, eps=1e-8).mean(),
         "angular"   : lambda x, y: F.cosine_similarity(x, y, dim=1, eps=1e-8).acos().mean() / math.pi,
-        "SSIM"      : lambda x, y: pytorch_ssim.ssim(torch.unsqueeze(x, 1), torch.unsqueeze(y, 1), window_size = 11, size_average = True)
+        "SSIM"      : lambda x, y: pytorch_ssim.ssim(torch.unsqueeze(x, 1), torch.unsqueeze(y, 1), window_size=11, size_average=True)
     }
     sim_func = simfunctions["MSE"]
     #sim_func = simfunctions["SSIM"]
     # Temperature (tau) of the loss
-    tau = args['temperature'] #0.5
+    tau = args['temperature']  # 0.5
     # L1/L2 activation regularization
-    act_l1 = args['l1'] #1e-4 in paper
-    act_l2 = args['l2'] # 1e-4 in paper
+    act_l1 = args['l1']  # 1e-4 in paper
+    act_l2 = args['l2']  # 1e-4 in paper
 
     # p4 Equivariance (should always be True, unless you want to see how everything breaks visually otherwise)
     equivariance = args['equivariance']
@@ -386,8 +392,8 @@ if __name__ == "__main__":
     # Device to train on (inference is done on cpu)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # Use two GPUs?
-    device1 = device2 = device # 1 gpu for 2 modalities
-    #device1, device2 = "cuda:0", "cuda:1" # 1 gpu per modality
+    device1 = device2 = device  # 1 gpu for 2 modalities
+    #device1, device2 = "cuda:0", "cuda:1"  # 1 gpu per modality
     # Arguments for the tiramisu neural network
     tiramisu_args = {
         # Number of convolutional filters for the first convolution
@@ -403,7 +409,7 @@ if __name__ == "__main__":
         # Type of max pooling, blurpool has better shift-invariance
         "transition_pooling": "max",
         # Dropout rate for the convolution
-        "dropout_rate": 0.0,#0.2 in paper
+        "dropout_rate": 0.0,  # 0.2 in paper
         # Early maxpooling to reduce the input size
         "early_transition": False,
         # Activation function at the last layer
@@ -473,11 +479,11 @@ if __name__ == "__main__":
     center_crop = args['center_crop']
     transform = ImgAugTransform3D(crop_size=crop_size, center_crop=center_crop) \
         if dim == 3 else ImgAugTransform(crop_size=crop_size, center_crop=center_crop)
-    dset = MultimodalDataset(modA_train_path + '/*', modB_train_path + '/*', logA=logTransformA, logB=logTransformB, transform=transform, dim=dim)
+    dset = MultimodalDataset(modA_train_path + '/*', modB_train_path + '/*', logA=logTransformA, logB=logTransformB, transform=transform, dim=dim, singleaxis=single_axis)
     if modA_val_path is not None and modB_val_path is not None:
         validation_enabled = True
         print("Loading test set...")
-        dset_test = MultimodalDataset(modA_val_path + '/*', modB_val_path + '/*', logA=logTransformA, logB=logTransformB, transform=transform, dim=dim)  # testing=True?
+        dset_test = MultimodalDataset(modA_val_path + '/*', modB_val_path + '/*', logA=logTransformA, logB=logTransformB, transform=transform, dim=dim, singleaxis=single_axis)  # testing=True?
     else:
         validation_enabled = False
 
