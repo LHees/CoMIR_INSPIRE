@@ -173,7 +173,7 @@ class ImgAugTransform:
 
     def __call__(self, img):
         img = np.array(img)
-        return self.aug.augment_image(img)
+        return self.aug.augment_image(img).copy()
 
 
 class ImgAugTransform3D:
@@ -189,7 +189,7 @@ class ImgAugTransform3D:
 
     def __call__(self, img):
         img = np.array(img)
-        return self.aug.augment(img)
+        return self.aug.augment(img).copy()
 
 
 class ModNet(DenseUNet):

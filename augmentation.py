@@ -49,11 +49,11 @@ class Augmentor():
                         image[:, :, :, channel], sigma, mode="mirror")
 
         if self.fliplr_p > random.random():
-            image = image[:, ::-1, ...].copy()
+            image = image[:, ::-1, ...]
 
         if self.random_rot_90:
             k = random.randint(1, 4)
-            image = np.rot90(image, k, (1, 2)).copy()
+            image = np.rot90(image, k, (1, 2))
 
         return image
 
