@@ -400,9 +400,9 @@ if __name__ == "__main__":
         # Number of convolutional filters for the first convolution
         "init_conv_filters": 32,
         # Number and depth of down blocks
-        "down_blocks": tuple([4] * 5 if dim == 3 else 6),
+        "down_blocks": tuple([4] * (5 if dim == 3 else 6)),
         # Number and depth of up blocks
-        "up_blocks": tuple([4] * 5 if dim == 3 else 6),
+        "up_blocks": tuple([4] * (5 if dim == 3 else 6)),
         # Number of dense layers in the bottleneck
         "bottleneck_layers": 4,
         # Upsampling type of layer (upsample has no grid artefacts)
