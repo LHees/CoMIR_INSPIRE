@@ -153,22 +153,18 @@ class MultimodalDataset(Dataset):
 
 
 class ImgAugTransform:
-    def __init__(self, testing=False, crop_size=128, center_crop=True):
+    def __init__(self, testing=False, crop_size=128, center_crop=True,
+                 random_rot_90=True):
 
         if not testing:
-            if center_crop:
-                cropping = iaa.CenterCropToFixedSize(crop_size,crop_size)
-                affine_transform = iaa.Affine(rotate=(-180, 180), order=[0, 1, 3], mode="symmetric")
-            else:
-                cropping = iaa.CropToFixedSize(crop_size,crop_size, position='uniform')  # was normal
-                affine_transform = iaa.Affine(rotate=(0, 0), order=[0, 1, 3], mode="symmetric")
             self.aug = iaa.Sequential([
-                iaa.Fliplr(0.5),
-                affine_transform,
+                iaa.CenterCropToFixedSize(crop_size, crop_size) if center_crop else
+                iaa.CropToFixedSize(crop_size, crop_size, position='uniform'),
                 iaa.Sometimes(
                     0.5,
                     iaa.GaussianBlur(sigma=(0, 2.0))),
-                cropping
+                iaa.Fliplr(0.5),
+                iaa.Rot90(imgaug.ALL if random_rot_90 else 0)
             ])
         else:
             self.aug = iaa.Sequential([
@@ -181,13 +177,15 @@ class ImgAugTransform:
 
 
 class ImgAugTransform3D:
-    def __init__(self, testing=False, crop_size=32, center_crop=False):
+    def __init__(self, testing=False, crop_size=32, center_crop=False,
+                 random_rot_90=True):
         self.aug = Augmentor()
         self.aug.set_crop('center' if center_crop else 'uniform', crop_size)
 
         if not testing:
             self.aug.set_blur((0.0, 0.2), 0.5)
-            self.aug.set_fliplr(True, 0.5)
+            self.aug.set_fliplr(0.5)
+            self.aug.set_random_rot_90(random_rot_90)
 
     def __call__(self, img):
         img = np.array(img)
@@ -277,6 +275,7 @@ if __name__ == "__main__":
         msg += "  'log_a': log transform of modality A [0/1] (default 0)\n"
         msg += "  'log_b': log transform of modality B [0/1] (default 0)\n"
         msg += "  'center_crop': to always crop image center [0/1] (default 1)\n"
+        msg += "  'rotation': to include random 90 degree rotations in augmentation (not the same as rotational equivariance) [0/1] (default 1)\n"
         msg += "  'l1': l1 activation decay (default 0.0001)\n"
         msg += "  'l2': l2 activation decay (default 0.1)\n"
         msg += "  'temperature': critic scaling (default 0.5)\n"
@@ -293,7 +292,6 @@ if __name__ == "__main__":
             print('No training set provided.')
             sys.exit(-1)
 
-        valid_keys = {'export_folder', 'val_path_a', 'val_path_b', 'log_a', 'log_b', 'iterations', 'dim', 'single_axis', 'channels', 'equivariance', 'l1', 'l2', 'temperature', 'workers', 'critic', 'crop_size'}
         valid_equivariances = ["rotational", "affine", "deformable", "combined"]
 
         args['train_path_a'] = sys.argv[1]
@@ -306,6 +304,7 @@ if __name__ == "__main__":
         args['log_a'] = False
         args['log_b'] = False
         args['center_crop'] = True
+        args['rotation'] = True
         args['iterations'] = 100
         args['dim'] = 2
         args['single_axis'] = False
@@ -334,7 +333,7 @@ if __name__ == "__main__":
             if key == 'equivariance':
                 assert val in valid_equivariances, val + " is not a valid equivariance"
 
-            if key == 'log_a' or key == 'log_b' or key == 'center_crop' or key == 'single_axis':
+            if key == 'log_a' or key == 'log_b' or key == 'center_crop' or key == 'rotation' or key == 'single_axis':
                 args[key] = int(val) != 0
             elif key == 'iterations' or key == 'dim' or key == 'channels' or key == 'workers' or key == 'crop_size':
                 args[key] = int(val)
@@ -479,8 +478,9 @@ if __name__ == "__main__":
 
     crop_size = args['crop_size']
     center_crop = args['center_crop']
-    transform = ImgAugTransform3D(crop_size=crop_size, center_crop=center_crop) \
-        if dim == 3 else ImgAugTransform(crop_size=crop_size, center_crop=center_crop)
+    rotation = args['rotation']
+    transform = ImgAugTransform3D(crop_size=crop_size, center_crop=center_crop, random_rot_90=rotation) \
+        if dim == 3 else ImgAugTransform(crop_size=crop_size, center_crop=center_crop, random_rot_90=rotation)
     dset = MultimodalDataset(modA_train_path + '/*', modB_train_path + '/*', logA=logTransformA, logB=logTransformB, transform=transform, dim=dim, singleaxis=single_axis)
     if modA_val_path is not None and modB_val_path is not None:
         validation_enabled = True

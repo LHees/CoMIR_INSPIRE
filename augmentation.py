@@ -11,8 +11,8 @@ class Augmentor():
         self.crop_size = None
         self.blur_sigma = None
         self.blur_p = 0
-        self.fliplr = False
         self.fliplr_p = 0
+        self.random_rot_90 = False
 
     def augment(self, image: np.ndarray):  # augment the image in situ
         z, y, x, c = image.shape  # assuming z*y*x*c shape
@@ -33,7 +33,7 @@ class Augmentor():
                                 for point in crop_point])
             image = image[crop_slice]
 
-        if self.blur_sigma is not None and random.random() <= self.blur_p:  # blur
+        if self.blur_sigma is not None and self.blur_p > random.random():  # blur
             if isinstance(self.blur_sigma, (int, float)):
                 sigma = self.blur_sigma
             elif isinstance(self.blur_sigma, tuple) and \
@@ -48,8 +48,12 @@ class Augmentor():
                     image[:, :, :, channel] = ndimage.gaussian_filter(
                         image[:, :, :, channel], sigma, mode="mirror")
 
-        if self.fliplr and self.fliplr_p <= random.random():
+        if self.fliplr_p > random.random():
             image = image[:, ::-1, ...].copy()
+
+        if self.random_rot_90:
+            k = random.randint(1, 4)
+            image = np.rot90(image, k, (1, 2)).copy()
 
         return image
 
@@ -63,9 +67,11 @@ class Augmentor():
         self.blur_sigma = sigma
         self.blur_p = p
 
-    def set_fliplr(self, fliplr: bool, p=0.5):
-        self.fliplr = fliplr
+    def set_fliplr(self, p=0):
         self.fliplr_p = p
+
+    def set_random_rot_90(self, b=False):
+        self.random_rot_90 = b
 
     def _compute_crop_sample_space(self, z, y, x):
         space = range(self.crop_size//2, z - self.crop_size//2 - 1), \
@@ -80,8 +86,10 @@ class Augmentor():
             operations.append("cropping")
         if self.blur_sigma is not None and self.blur_p != 0:
             operations.append("blurring")
-        if self.fliplr and self.fliplr_p != 0:
+        if self.fliplr_p > 0:
             operations.append("left-right flipping")
+        if self.random_rot_90:
+            operations.append("random 90 degree rotation")
         string += ', '.join(operations)
         return string
 
