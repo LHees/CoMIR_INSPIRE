@@ -81,6 +81,10 @@ class MultimodalDataset(Dataset):
         if dim == 2 and singleaxis:
             self.filenamesA = [x for x in self.filenamesA if "rot-0" in x]
             self.filenamesB = [x for x in self.filenamesB if "rot-0" in x]
+        lenA = len(pathA[0])
+        lenB = len(pathB[0])
+        self.filenamesA.sort(key=lambda sub: (sub[lenA:lenA+8], int(sub[lenA+15:-4])) if not sub.endswith(".nii.gz") else sub)
+        self.filenamesB.sort(key=lambda sub: (sub[lenB:lenB+8], int(sub[lenB+15:-4])) if not sub.endswith(".nii.gz") else sub)
 
         self.channels = [None, None]
 

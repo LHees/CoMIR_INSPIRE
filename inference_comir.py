@@ -1,4 +1,4 @@
-
+# TODO: test if this still works (for the original 2D use cases)
 #
 # Script for performing inference of CoMIR:s
 # Authors: Nicolas Pielawski, Elisabeth Wetzer, Johan Ofverstedt
@@ -7,7 +7,7 @@
 #
 
 from models.tiramisu import DenseUNet
-from train_comir import MultimodalDataset, ModNet, ModNet3D, ImgAugTransform3D
+from train_comir import MultimodalDataset, ModNet, ImgAugTransform
 
 # Python Standard Libraries
 from datetime import datetime
@@ -80,7 +80,7 @@ if __name__ == "__main__":
     # %%
     print(len(sys.argv), sys.argv)
     if len(sys.argv) < 6:
-        print('Use: inference_comir.py model_path mod_a_path mod_b_path mod_a_out_path mod_b_out_path [crop_size]')
+        print('Use: inference_comir.py model_path mod_a_path mod_b_path mod_a_out_path mod_b_out_path')
         sys.exit(-1)
 
     model_path = sys.argv[1]
@@ -88,9 +88,6 @@ if __name__ == "__main__":
     modB_path = sys.argv[3]
     modA_out_path = sys.argv[4]
     modB_out_path = sys.argv[5]
-    dim = 3  # TODO: generalize
-    crop_size = int(sys.argv[6]) if len(sys.argv) >= 7 else 100
-
 
     if modA_path[-1] != '/':
         modA_path += '/'
@@ -117,17 +114,16 @@ if __name__ == "__main__":
     modelB = checkpoint['modelB']
 
     print("Loading dataset...")
-    transform = ImgAugTransform3D(crop_size=crop_size, center_crop=True)
-    dset = MultimodalDataset(modA_path + '*', modB_path + '*', logA=modelA.log_transform, logB=modelB.log_transform, transform=transform, dim=dim)
+    dset = MultimodalDataset(modA_path + '*', modB_path + '*', logA=modelA.log_transform, logB=modelB.log_transform, transform=None, dim=2)
 
     # Modality slicing
     # You can choose a set of channels per modality (RGB for instance)
     # Modality A
-    modA_len = modelA.in_channels #dset.channels[0]
+    modA_len = modelA.in_channels
     modA = slice(0, modA_len)
     modA_name = "A"
     # Modality B
-    modB_len = modelB.in_channels #dset.channels[1]
+    modB_len = modelB.in_channels
     modB = slice(modA_len, modA_len + modB_len)
     modB_name = "B"
     print('Modality A has ', modA_len, ' channels.', sep='')
@@ -172,22 +168,18 @@ if __name__ == "__main__":
             if not autocast and device.type == 'cuda':
                 batch = batch.half()
 
-            padsz = 16 if dim == 3 else 128
+            padsz = 128
             orig_shape = batch.shape
             pad1 = compute_padding(batch.shape[-1], alignment=padsz)
             pad2 = compute_padding(batch.shape[-2], alignment=padsz)
-            if dim == 3:
-                pad3 = compute_padding(batch.shape[-3], alignment=padsz)
 
-            padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz+pad2, padsz, padsz+pad3) if dim == 3 else
-                                        (padsz, padsz+pad1, padsz, padsz+pad2), mode='reflect')
+            padded_batch = F.pad(batch, (padsz, padsz+pad1, padsz, padsz+pad2),
+                                 mode='reflect')
             L1 = modelA(padded_batch[:, modA])
             L2 = modelB(padded_batch[:, modB])
 
-            L1 = L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3], padsz:padsz+orig_shape[4]] \
-                if dim == 3 else L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
-            L2 = L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3], padsz:padsz+orig_shape[4]] \
-                if dim == 3 else L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
+            L1 = L1[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
+            L2 = L2[:, :, padsz:padsz+orig_shape[2], padsz:padsz+orig_shape[3]]
 
             for j in range(len(batch)):
                 path1 = modA_out_path + names[j]
@@ -205,8 +197,8 @@ if __name__ == "__main__":
                     im1 = np.round(scipy.special.expit(im1) * 255).astype('uint8')
                     im2 = np.round(scipy.special.expit(im2) * 255).astype('uint8')
 
-                skio.imsave(path1, im1, plugin='simpleitk' if dim == 3 else None)
-                skio.imsave(path2, im2, plugin='simpleitk' if dim == 3 else None)
+                skio.imsave(path1, im1)
+                skio.imsave(path2, im2)
                 print(f'Encodeing... {idx}/{N}')
                 idx += 1
 
