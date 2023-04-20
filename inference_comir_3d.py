@@ -164,7 +164,7 @@ if __name__ == "__main__":
                           channel_dimension=0)
             padded_shape, padding = tiler.calculate_padding()
             tiler.recalculate(data_shape=padded_shape)
-            merger = Merger(tiler=tiler, window='overlap-tile')
+            merger = Merger(tiler=tiler, window='hann')
 
             padded_item = np.pad(item, padding, mode='reflect')
             for tile_id, tile in tiler(padded_item, progress_bar=True):
