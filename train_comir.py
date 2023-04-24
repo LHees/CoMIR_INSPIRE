@@ -81,10 +81,8 @@ class MultimodalDataset(Dataset):
         if dim == 2 and singleaxis:
             self.filenamesA = [x for x in self.filenamesA if "rot-0" in x]
             self.filenamesB = [x for x in self.filenamesB if "rot-0" in x]
-        lenA = len(pathA[0])
-        lenB = len(pathB[0])
-        self.filenamesA.sort(key=lambda sub: (sub[lenA:lenA+8], int(sub[lenA+15:-4])) if not sub.endswith(".nii.gz") else sub)
-        self.filenamesB.sort(key=lambda sub: (sub[lenB:lenB+8], int(sub[lenB+15:-4])) if not sub.endswith(".nii.gz") else sub)
+        self.filenamesA.sort()
+        self.filenamesB.sort()
 
         self.channels = [None, None]
 
@@ -157,8 +155,7 @@ class MultimodalDataset(Dataset):
 
 
 class ImgAugTransform:
-    def __init__(self, testing=False, crop_size=128, center_crop=True,
-                 random_rot_90=True):
+    def __init__(self, testing=False, crop_size=128, center_crop=True):
 
         if not testing:
             self.aug = iaa.Sequential([
@@ -168,7 +165,7 @@ class ImgAugTransform:
                     0.5,
                     iaa.GaussianBlur(sigma=(0, 2.0))),
                 iaa.Fliplr(0.5),
-                iaa.Rot90(imgaug.ALL if random_rot_90 else 0)
+                iaa.Rot90(imgaug.ALL)
             ])
         else:
             self.aug = iaa.Sequential([
@@ -181,15 +178,14 @@ class ImgAugTransform:
 
 
 class ImgAugTransform3D:
-    def __init__(self, testing=False, crop_size=32, center_crop=False,
-                 random_rot_90=True):
+    def __init__(self, testing=False, crop_size=32, center_crop=False):
         self.aug = Augmentor()
         self.aug.set_crop('center' if center_crop else 'uniform', crop_size)
 
         if not testing:
             self.aug.set_blur((0.0, 0.2), 0.5)
             self.aug.set_fliplr(0.5)
-            self.aug.set_random_rot_90(random_rot_90)
+            self.aug.set_random_rot_90(True)
 
     def __call__(self, img):
         img = np.array(img)
@@ -279,7 +275,6 @@ if __name__ == "__main__":
         msg += "  'log_a': log transform of modality A [0/1] (default 0)\n"
         msg += "  'log_b': log transform of modality B [0/1] (default 0)\n"
         msg += "  'center_crop': to always crop image center [0/1] (default 1)\n"
-        msg += "  'rotation': to include random 90 degree rotations in augmentation (not the same as rotational equivariance) [0/1] (default 1)\n"
         msg += "  'l1': l1 activation decay (default 0.0001)\n"
         msg += "  'l2': l2 activation decay (default 0.1)\n"
         msg += "  'temperature': critic scaling (default 0.5)\n"
@@ -308,7 +303,6 @@ if __name__ == "__main__":
         args['log_a'] = False
         args['log_b'] = False
         args['center_crop'] = True
-        args['rotation'] = True
         args['iterations'] = 100
         args['dim'] = 2
         args['single_axis'] = False
@@ -337,7 +331,7 @@ if __name__ == "__main__":
             if key == 'equivariance':
                 assert val in valid_equivariances, val + " is not a valid equivariance"
 
-            if key == 'log_a' or key == 'log_b' or key == 'center_crop' or key == 'rotation' or key == 'single_axis':
+            if key == 'log_a' or key == 'log_b' or key == 'center_crop' or key == 'single_axis':
                 args[key] = int(val) != 0
             elif key == 'iterations' or key == 'dim' or key == 'channels' or key == 'workers' or key == 'crop_size':
                 args[key] = int(val)
@@ -482,9 +476,8 @@ if __name__ == "__main__":
 
     crop_size = args['crop_size']
     center_crop = args['center_crop']
-    rotation = args['rotation']
-    transform = ImgAugTransform3D(crop_size=crop_size, center_crop=center_crop, random_rot_90=rotation) \
-        if dim == 3 else ImgAugTransform(crop_size=crop_size, center_crop=center_crop, random_rot_90=rotation)
+    transform = ImgAugTransform3D(crop_size=crop_size, center_crop=center_crop) \
+        if dim == 3 else ImgAugTransform(crop_size=crop_size, center_crop=center_crop)
     dset = MultimodalDataset(modA_train_path + '/*', modB_train_path + '/*', logA=logTransformA, logB=logTransformB, transform=transform, dim=dim, singleaxis=single_axis)
     if modA_val_path is not None and modB_val_path is not None:
         validation_enabled = True
@@ -850,9 +843,6 @@ if __name__ == "__main__":
             batch_progress = '[Batch:' + str(batch_idx+1) + '/' + str(steps_per_epoch) + ']'
             print('\r', epoch_progress, batch_progress, ' Loss: ', np.mean(train_loss), ' +- ', std_dev_of_loss(train_loss), ' (', np.mean(errors), ')   ', sep='', end='')
 
-
-
-
         print()
         # Testing after each epoch
 
@@ -890,8 +880,6 @@ if __name__ == "__main__":
             tb.add_image("comirB", comirB, epoch)
 
         tb.add_scalar("Loss/Train", np.mean(train_loss), epoch)
-
-
 
         backup_model_path = os.path.join(export_folder, f"backup.pt")
         with warnings.catch_warnings():

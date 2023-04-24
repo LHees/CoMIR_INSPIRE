@@ -16,8 +16,8 @@ def evaluate(path, mod1, mod2):
     flat_comirs1 = [comir.flatten() for comir in comirs1]
     flat_comirs2 = [comir.flatten() for comir in comirs2]
 
-    return np.mean([pearsonr(flat1, flat2).statistic for flat1, flat2 in
-                    zip(flat_comirs1, flat_comirs2)])
+    return [pearsonr(flat1, flat2).statistic for flat1, flat2 in
+            zip(flat_comirs1, flat_comirs2)]
 
 
 if __name__ == "__main__":
@@ -29,4 +29,6 @@ if __name__ == "__main__":
     mod2 = "flair"
     if len(sys.argv) == 4:
         mod1, mod2 = sys.argv[2:]
-    print(evaluate(path, mod1, mod2))
+    rs = evaluate(path, mod1, mod2)
+    print(rs)
+    print(f'mean: {np.mean(rs)}')
