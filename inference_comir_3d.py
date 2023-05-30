@@ -81,7 +81,7 @@ if __name__ == "__main__":
     # %%
     print(len(sys.argv), sys.argv)
     if len(sys.argv) < 5:
-        print('Use: inference_comir.py model_path mod_a_path mod_b_path mod_a_out_path mod_b_out_path')
+        print('Use: inference_comir_3d.py model_path mod_a_path mod_b_path mod_a_out_path mod_b_out_path')
         sys.exit(-1)
 
     model_path = sys.argv[1]
