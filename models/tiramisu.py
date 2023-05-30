@@ -70,7 +70,7 @@ class DenseBlock(nn.Module):
         growth_rate,
         nb_layers,
         upsample=False,
-        batch_norm=True,
+        batch_norm="batchnorm",
         dropout=0.2,
         efficient=False,
     ):
